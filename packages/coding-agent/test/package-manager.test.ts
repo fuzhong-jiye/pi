@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdirSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
+import { mkdirSync, rmSync, statSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join, relative } from "node:path";
 import { PassThrough } from "node:stream";
@@ -33,6 +33,20 @@ interface PackageManagerInternals {
 		options?: { cwd?: string; timeoutMs?: number; env?: Record<string, string> },
 	): Promise<string>;
 	getLocalGitUpdateTarget(installedPath: string): Promise<{ ref: string; head: string; fetchArgs: string[] }>;
+	parseSource(
+		source: string,
+	):
+		| { type: "npm"; spec: string; name: string; pinned: boolean }
+		| { type: "git"; repo: string; host: string; path: string; pinned: boolean; ref?: string }
+		| { type: "local"; path: string };
+	getNpmInstallPath(
+		source: { type: "npm"; spec: string; name: string; pinned: boolean },
+		scope: "user" | "project" | "temporary",
+	): string;
+	getGitInstallPath(
+		source: { type: "git"; repo: string; host: string; path: string; pinned: boolean; ref?: string },
+		scope: "user" | "project" | "temporary",
+	): string;
 }
 
 // Helper to check if a resource is enabled
@@ -693,7 +707,17 @@ Content`,
 
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"mise",
-				["exec", "node@20", "--", "npm", "install", "@scope/pkg", "--prefix", join(agentDir, "npm")],
+				[
+					"exec",
+					"node@20",
+					"--",
+					"npm",
+					"install",
+					"@scope/pkg",
+					"--prefix",
+					join(agentDir, "npm"),
+					"--legacy-peer-deps",
+				],
 				undefined,
 			);
 		});
@@ -714,7 +738,7 @@ Content`,
 
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"mise",
-				["exec", "bun@1", "--", "bun", "install", "@scope/pkg", "--cwd", join(agentDir, "npm")],
+				["exec", "bun@1", "--", "bun", "install", "@scope/pkg", "--cwd", join(agentDir, "npm"), "--omit=peer"],
 				undefined,
 			);
 		});
@@ -953,6 +977,8 @@ Content`,
 						"pnpm-pkg",
 						"--prefix",
 						join(agentDir, "npm"),
+						"--config.auto-install-peers=false",
+						"--config.strict-peer-dependencies=false",
 						"--config.strict-dep-builds=false",
 					]);
 					mkdirSync(join(packagePath, "extensions"), { recursive: true });
@@ -1123,6 +1149,45 @@ Content`,
 			const dotDotSlash = (packageManager as any).parseSource("../packages/agent-timers");
 			expect(dotDotSlash.type).toBe("local");
 			expect(dotDotSlash.path).toBe("../packages/agent-timers");
+		});
+	});
+
+	describe("git install paths", () => {
+		it("should reject paths outside git install roots", () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const traversalSource = {
+				type: "git" as const,
+				repo: "git@evil.example:../../victim/repo",
+				host: "evil.example",
+				path: "../../victim/repo",
+				pinned: false,
+			};
+
+			for (const scope of ["user", "project", "temporary"] as const) {
+				expect(() => managerWithInternals.getGitInstallPath(traversalSource, scope)).toThrow(
+					"outside package install root",
+				);
+			}
+		});
+	});
+
+	describe("temporary install paths", () => {
+		it("should place temporary npm packages under the agent temp extension folder", () => {
+			const managerWithInternals = packageManager as unknown as PackageManagerInternals;
+			const source = managerWithInternals.parseSource("npm:left-pad");
+			if (source.type !== "npm") {
+				throw new Error("Expected npm source");
+			}
+
+			const installPath = managerWithInternals.getNpmInstallPath(source, "temporary");
+			const tempRoot = join(agentDir, "tmp", "extensions");
+
+			expect(pathEndsWith(installPath, "node_modules/left-pad")).toBe(true);
+			expect(relative(tempRoot, installPath).startsWith("..")).toBe(false);
+			expect(installPath.startsWith(join(tmpdir(), "pi-extensions"))).toBe(false);
+			if (process.platform !== "win32") {
+				expect(statSync(tempRoot).mode & 0o777).toBe(0o700);
+			}
 		});
 	});
 
@@ -2005,7 +2070,7 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			);
 			expect(runCommandSpy).toHaveBeenCalledWith(
 				"npm",
-				["install", "example@latest", "--prefix", join(tempDir, ".pi", "npm")],
+				["install", "example@latest", "--prefix", join(tempDir, ".pi", "npm"), "--legacy-peer-deps"],
 				undefined,
 			);
 		});
@@ -2044,7 +2109,13 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 				.mockImplementation(async (...callArgs: unknown[]) => {
 					const [command, args] = callArgs as [string, string[]];
 					expect(command).toBe("npm");
-					expect(args).toEqual(["install", "legacy-pkg@latest", "--prefix", join(agentDir, "npm")]);
+					expect(args).toEqual([
+						"install",
+						"legacy-pkg@latest",
+						"--prefix",
+						join(agentDir, "npm"),
+						"--legacy-peer-deps",
+					]);
 					mkdirSync(managedPath, { recursive: true });
 					writeFileSync(
 						join(managedPath, "package.json"),
@@ -2154,13 +2225,27 @@ export default function(api) { api.registerTool({ name: "test", description: "te
 			expect(runCommandSpy).toHaveBeenNthCalledWith(
 				1,
 				"npm",
-				["install", "user-old@latest", "user-unknown@latest", "--prefix", join(agentDir, "npm")],
+				[
+					"install",
+					"user-old@latest",
+					"user-unknown@latest",
+					"--prefix",
+					join(agentDir, "npm"),
+					"--legacy-peer-deps",
+				],
 				undefined,
 			);
 			expect(runCommandSpy).toHaveBeenNthCalledWith(
 				2,
 				"npm",
-				["install", "project-old@latest", "project-missing@latest", "--prefix", join(tempDir, ".pi", "npm")],
+				[
+					"install",
+					"project-old@latest",
+					"project-missing@latest",
+					"--prefix",
+					join(tempDir, ".pi", "npm"),
+					"--legacy-peer-deps",
+				],
 				undefined,
 			);
 			expect(updateGitSpy).toHaveBeenCalledTimes(4);

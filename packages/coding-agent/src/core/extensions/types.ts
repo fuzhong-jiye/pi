@@ -295,10 +295,14 @@ export interface CompactOptions {
 /**
  * Context passed to extension event handlers.
  */
+export type ExtensionMode = "tui" | "rpc" | "json" | "print";
+
 export interface ExtensionContext {
 	/** UI methods for user interaction */
 	ui: ExtensionUIContext;
-	/** Whether UI is available (false in print/RPC mode) */
+	/** Current run mode. Use "tui" to guard terminal-only UI such as custom components. */
+	mode: ExtensionMode;
+	/** Whether dialog-capable UI is available (true in TUI and RPC modes) */
 	hasUI: boolean;
 	/** Current working directory */
 	cwd: string;
@@ -331,6 +335,9 @@ export interface ExtensionContext {
  * Includes session control methods only safe in user-initiated commands.
  */
 export interface ExtensionCommandContext extends ExtensionContext {
+	/** Get the current base system-prompt construction options. */
+	getSystemPromptOptions(): BuildSystemPromptOptions;
+
 	/** Wait for the agent to finish streaming */
 	waitForIdle(): Promise<void>;
 
@@ -756,6 +763,8 @@ export interface InputEvent {
 	images?: ImageContent[];
 	/** Where the input came from */
 	source: InputSource;
+	/** How the input will be delivered during streaming, or undefined when idle */
+	streamingBehavior?: "steer" | "followUp";
 }
 
 /** Result from input event handler */
@@ -1211,7 +1220,7 @@ export interface ExtensionAPI {
 	/** Get the list of currently active tool names. */
 	getActiveTools(): string[];
 
-	/** Get all configured tools with parameter schema and source metadata. */
+	/** Get all configured tools with parameter schema, prompt guidelines, and source metadata. */
 	getAllTools(): ToolInfo[];
 
 	/** Set the active tools by name. */
@@ -1254,7 +1263,7 @@ export interface ExtensionAPI {
 	 * // Register a new provider with custom models
 	 * pi.registerProvider("my-proxy", {
 	 *   baseUrl: "https://proxy.example.com",
-	 *   apiKey: "PROXY_API_KEY",
+	 *   apiKey: "$PROXY_API_KEY",
 	 *   api: "anthropic-messages",
 	 *   models: [
 	 *     {
@@ -1320,7 +1329,7 @@ export interface ProviderConfig {
 	name?: string;
 	/** Base URL for the API endpoint. Required when defining models. */
 	baseUrl?: string;
-	/** API key or environment variable name. Required when defining models (unless oauth provided). */
+	/** API key literal, env interpolation ($ENV_VAR or ${ENV_VAR}), or leading !command. Required when defining models (unless oauth provided). */
 	apiKey?: string;
 	/** API type. Required at provider or model level when defining models. */
 	api?: Api;
@@ -1422,8 +1431,8 @@ export type GetSessionNameHandler = () => string | undefined;
 
 export type GetActiveToolsHandler = () => string[];
 
-/** Tool info with name, description, parameter schema, and source metadata */
-export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters"> & {
+/** Tool info with name, description, parameter schema, prompt guidelines, and source metadata. */
+export type ToolInfo = Pick<ToolDefinition, "name" | "description" | "parameters" | "promptGuidelines"> & {
 	sourceInfo: SourceInfo;
 };
 
@@ -1500,6 +1509,7 @@ export interface ExtensionContextActions {
 	getContextUsage: () => ContextUsage | undefined;
 	compact: (options?: CompactOptions) => void;
 	getSystemPrompt: () => string;
+	getSystemPromptOptions?: () => BuildSystemPromptOptions;
 }
 
 /**

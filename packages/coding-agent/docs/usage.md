@@ -76,6 +76,7 @@ Sessions are saved automatically to `~/.pi/agent/sessions/`, organized by workin
 pi -c                  # Continue most recent session
 pi -r                  # Browse and select a session
 pi --no-session        # Ephemeral mode; do not save
+pi --name "my task"    # Set session display name at startup
 pi --session <path|id> # Use a specific session file or session ID
 pi --fork <path|id>    # Fork a session into a new session file
 ```
@@ -178,12 +179,14 @@ cat README.md | pi -p "Summarize this text"
 | `--fork <path\|id>` | Fork a session file or partial UUID into a new session |
 | `--session-dir <dir>` | Custom session storage directory |
 | `--no-session` | Ephemeral mode; do not save |
+| `--name <name>`, `-n <name>` | Set session display name at startup |
 
 ### Tool Options
 
 | Option | Description |
 |--------|-------------|
 | `--tools <list>`, `-t <list>` | Allowlist specific built-in, extension, and custom tools |
+| `--exclude-tools <list>`, `-xt <list>` | Disable specific built-in, extension, and custom tools |
 | `--no-builtin-tools`, `-nbt` | Disable built-in tools but keep extension/custom tools enabled |
 | `--no-tools`, `-nt` | Disable all tools |
 
@@ -241,6 +244,9 @@ pi -p "Summarize this codebase"
 # Non-interactive with piped stdin
 cat README.md | pi -p "Summarize this text"
 
+# Named one-shot session
+pi --name "release audit" -p "Audit this repository"
+
 # Different model
 pi --provider openai --model gpt-4o "Help me refactor"
 
@@ -255,6 +261,9 @@ pi --models "claude-*,gpt-4o"
 
 # Read-only mode
 pi --tools read,grep,find,ls -p "Review the code"
+
+# Disable one extension or built-in tool while keeping the rest available
+pi --exclude-tools ask_question
 ```
 
 ### Environment Variables
@@ -266,7 +275,7 @@ pi --tools read,grep,find,ls -p "Review the code"
 | `PI_PACKAGE_DIR` | Override package directory, useful for Nix/Guix store paths |
 | `PI_OFFLINE` | Disable startup network operations, including update checks, package update checks, and install/update telemetry |
 | `PI_SKIP_VERSION_CHECK` | Skip the Pi version update check at startup. This prevents the `pi.dev` latest-version request |
-| `PI_TELEMETRY` | Override install/update telemetry: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable update checks |
+| `PI_TELEMETRY` | Override install/update telemetry and provider attribution headers: `1`/`true`/`yes` or `0`/`false`/`no`. This does not disable update checks |
 | `PI_CACHE_RETENTION` | Set to `long` for extended prompt cache where supported |
 | `VISUAL`, `EDITOR` | External editor for Ctrl+G |
 

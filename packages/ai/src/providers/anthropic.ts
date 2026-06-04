@@ -6,7 +6,6 @@ import type {
 	MessageParam,
 	RawMessageStreamEvent,
 } from "@anthropic-ai/sdk/resources/messages.js";
-import { getEnvApiKey } from "../env-api-keys.ts";
 import { calculateCost } from "../models.ts";
 import type {
 	AnthropicMessagesCompat,
@@ -177,6 +176,8 @@ function getAnthropicCompat(
 		sendSessionAffinityHeaders:
 			model.compat?.sendSessionAffinityHeaders ?? !!(isFireworks || isCloudflareAiGatewayAnthropic),
 		supportsCacheControlOnTools: model.compat?.supportsCacheControlOnTools ?? !isFireworks,
+		supportsTemperature: model.compat?.supportsTemperature ?? true,
+		allowEmptySignature: model.compat?.allowEmptySignature ?? false,
 	};
 }
 
@@ -478,7 +479,10 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 				client = options.client;
 				isOAuth = false;
 			} else {
-				const apiKey = options?.apiKey ?? getEnvApiKey(model.provider) ?? "";
+				const apiKey = options?.apiKey;
+				if (!apiKey) {
+					throw new Error(`No API key for provider: ${model.provider}`);
+				}
 
 				let copilotDynamicHeaders: Record<string, string> | undefined;
 				if (model.provider === "github-copilot") {
@@ -512,7 +516,7 @@ export const streamAnthropic: StreamFunction<"anthropic-messages", AnthropicOpti
 			const requestOptions = {
 				...(options?.signal ? { signal: options.signal } : {}),
 				...(options?.timeoutMs !== undefined ? { timeout: options.timeoutMs } : {}),
-				...(options?.maxRetries !== undefined ? { maxRetries: options.maxRetries } : {}),
+				maxRetries: options?.maxRetries ?? 0,
 			};
 			const response = await client.messages.create({ ...params, stream: true }, requestOptions).asResponse();
 			await options?.onResponse?.({ status: response.status, headers: headersToRecord(response.headers) }, model);
@@ -734,7 +738,7 @@ export const streamSimpleAnthropic: StreamFunction<"anthropic-messages", SimpleS
 	context: Context,
 	options?: SimpleStreamOptions,
 ): AssistantMessageEventStream => {
-	const apiKey = options?.apiKey || getEnvApiKey(model.provider);
+	const apiKey = options?.apiKey;
 	if (!apiKey) {
 		throw new Error(`No API key for provider: ${model.provider}`);
 	}
@@ -893,9 +897,10 @@ function buildParams(
 	options?: AnthropicOptions,
 ): MessageCreateParamsStreaming {
 	const { cacheControl } = getCacheControl(model, options?.cacheRetention);
+	const compat = getAnthropicCompat(model);
 	const params: MessageCreateParamsStreaming = {
 		model: model.id,
-		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl),
+		messages: convertMessages(context.messages, model, isOAuthToken, cacheControl, compat.allowEmptySignature),
 		max_tokens: options?.maxTokens ?? model.maxTokens,
 		stream: true,
 	};
@@ -927,13 +932,12 @@ function buildParams(
 		];
 	}
 
-	// Temperature is incompatible with extended thinking (adaptive or budget-based).
-	if (options?.temperature !== undefined && !options?.thinkingEnabled) {
+	// Temperature is incompatible with extended thinking and unsupported on Claude Opus 4.7+.
+	if (options?.temperature !== undefined && !options?.thinkingEnabled && compat.supportsTemperature) {
 		params.temperature = options.temperature;
 	}
 
 	if (context.tools && context.tools.length > 0) {
-		const compat = getAnthropicCompat(model);
 		params.tools = convertTools(
 			context.tools,
 			isOAuthToken,
@@ -1001,6 +1005,7 @@ function convertMessages(
 	model: Model<"anthropic-messages">,
 	isOAuthToken: boolean,
 	cacheControl?: CacheControlEphemeral,
+	allowEmptySignature = false,
 ): MessageParam[] {
 	const params: MessageParam[] = [];
 
@@ -1069,13 +1074,21 @@ function convertMessages(
 					}
 					if (block.thinking.trim().length === 0) continue;
 					// If thinking signature is missing/empty (e.g., from aborted stream),
-					// convert to plain text block without <thinking> tags to avoid API rejection
-					// and prevent Claude from mimicking the tags in responses
+					// convert to plain text for Anthropic. Some compatible providers emit
+					// and accept empty signatures, so let marked models preserve the block.
 					if (!block.thinkingSignature || block.thinkingSignature.trim().length === 0) {
-						blocks.push({
-							type: "text",
-							text: sanitizeSurrogates(block.thinking),
-						});
+						blocks.push(
+							allowEmptySignature
+								? {
+										type: "thinking",
+										thinking: sanitizeSurrogates(block.thinking),
+										signature: "",
+									}
+								: {
+										type: "text",
+										text: sanitizeSurrogates(block.thinking),
+									},
+						);
 					} else {
 						blocks.push({
 							type: "thinking",

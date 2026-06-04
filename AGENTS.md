@@ -21,7 +21,7 @@
 - Always ask before removing functionality or code that appears intentional.
 - Do not preserve backward compatibility unless the user asks for it.
 - Never hardcode key checks (e.g. `matchesKey(keyData, "ctrl+x")`). Add defaults to `DEFAULT_EDITOR_KEYBINDINGS` or `DEFAULT_APP_KEYBINDINGS` so they stay configurable.
-- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead.
+- Never modify `packages/ai/src/models.generated.ts` directly; update `packages/ai/scripts/generate-models.ts` instead, then regenerate. Including the resulting `models.generated.ts` diff is always OK, even if regeneration includes unrelated upstream model metadata changes.
 
 ## Commands
 
@@ -66,6 +66,12 @@ If rebase conflicts occur:
 ## Issues and PRs
 
 See `CONTRIBUTING.md` for the contributor gate (auto-close workflows, `lgtm`/`lgtmi`, quality bar).
+
+When reviewing PRs:
+
+- Do not run `gh pr checkout`, `git switch`, or otherwise move the worktree to the PR branch unless the user explicitly asks.
+- Use `gh pr view`, `gh pr diff`, `gh api`, and local `git show`/`git diff` against fetched refs to inspect PR metadata, commits, and patches without changing branches.
+- If you need PR file contents, fetch/read them into temporary files or use `git show <ref>:<path>` without switching branches.
 
 When creating issues:
 
@@ -120,40 +126,35 @@ Attribution:
    ```bash
    npm run release:local -- --out /tmp/pi-local-release --force
    cd /tmp
+
+   # Node package install smoke tests
    /tmp/pi-local-release/node/pi --help
    /tmp/pi-local-release/node/pi --version
+   /tmp/pi-local-release/node/pi --list-models
+   /tmp/pi-local-release/node/pi -p "Say exactly: ok"
    /tmp/pi-local-release/node/pi
+
+   # Bun binary smoke tests
    /tmp/pi-local-release/bun/pi --help
    /tmp/pi-local-release/bun/pi --version
+   /tmp/pi-local-release/bun/pi --list-models
+   /tmp/pi-local-release/bun/pi -p "Say exactly: ok"
+   /tmp/pi-local-release/bun/pi
    ```
-   Verify startup, model/account listing, and at least one real prompt with the intended default provider. Failures are release blockers unless the user explicitly accepts the risk.
+   Verify both Node and Bun startup, model/account listing, interactive startup, and at least one real prompt with the intended default provider. The bare commands `/tmp/pi-local-release/node/pi` and `/tmp/pi-local-release/bun/pi` start interactive mode; run each in tmux, submit a prompt, and wait for the model reply before considering the interactive smoke test passed. Failures are release blockers unless the user explicitly accepts the risk.
 
-3. **Brief the user on the WebAuthn flow before running anything**. Print exactly the following message and then stop and wait for the user to confirm in their next message:
-
-   ```
-   Before I run the release script, read this carefully:
-
-   - `npm publish` uses WebAuthn 2FA.
-   - A login URL will appear in the live bash output in this TUI. I will NOT see it until the command exits.
-   - You must watch the bash output, cmd/ctrl-click the URL, log in in the browser, and select the "don't ask again for N minutes" option so publish can continue.
-   - This may happen more than once during the release.
-
-   Reply "ready" once you have read this and are watching the bash output. I will not run the release script until you do.
-   ```
-
-   Do not proceed to step 4 until the user explicitly confirms.
-
-4. **Run the release script**:
+3. **Run the release script**:
    ```bash
-   npm run release:patch    # fixes + additions
-   npm run release:minor    # breaking changes
+   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:patch    # fixes + additions
+   PI_ALLOW_LOCKFILE_CHANGE=1 npm_config_min_release_age=0 npm run release:minor    # breaking changes
    ```
-   Do not pass a `timeout` to the bash tool for this call. If publish fails partway, stop and report to the user what happened (which package failed, the error output) along with possible solutions. Never rerun the version bump on your own.
+   Use `npm_config_min_release_age=0` only for the release command. The repo's normal npm age gate can otherwise block the release lockfile refresh when the current workspace package version was published recently. Review any lockfile or shrinkwrap diffs the release creates before push.
 
-5. **After publish succeeds**:
-   - Add fresh `## [Unreleased]` sections to package changelogs.
-   - Commit with `Add [Unreleased] section for next cycle`.
-   - Push `main` and the release tag.
+   The release script bumps all package versions, updates changelogs, regenerates release artifacts, runs `npm run check`, commits `Release vX.Y.Z`, tags `vX.Y.Z`, adds fresh `## [Unreleased]` changelog sections, commits `Add [Unreleased] section for next cycle`, then pushes `main` and the tag. Do not rerun the release script after a tag was pushed.
+
+4. **CI publishes npm packages**: pushing the `vX.Y.Z` tag triggers `.github/workflows/build-binaries.yml`. The `publish-npm` job uses npm trusted publishing through GitHub Actions OIDC with environment `npm-publish`; no local `npm publish`, `npm whoami`, OTP, or WebAuthn flow is required.
+
+5. **If CI publish fails**: inspect the failed `publish-npm` job. The publish helper is idempotent and skips package versions already present on npm, so rerun the tag workflow after fixing CI or transient npm issues. Do not rerun `npm run release:patch` or `npm run release:minor` for the same version.
 
 ## User Override
 

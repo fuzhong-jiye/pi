@@ -132,18 +132,34 @@ async function startDeviceFlow(domain: string): Promise<DeviceCodeResponse> {
 		throw new Error("Invalid device code response fields");
 	}
 
+	// The verification URI is opened in the user's browser and to prevent `open` from
+	// opening an executable or similar, we force it to be a URL.
+	let parsedUri: URL;
+	try {
+		parsedUri = new URL(verificationUri);
+	} catch {
+		throw new Error("Untrusted verification_uri in device code response");
+	}
+	if (parsedUri.protocol !== "https:" && parsedUri.protocol !== "http:") {
+		throw new Error("Untrusted verification_uri in device code response");
+	}
+
 	return {
 		device_code: deviceCode,
 		user_code: userCode,
-		verification_uri: verificationUri,
+		verification_uri: parsedUri.href,
 		interval,
 		expires_in: expiresIn,
 	};
 }
 
-async function pollForGitHubAccessToken(domain: string, device: DeviceCodeResponse, signal?: AbortSignal) {
+async function pollForGitHubAccessToken(
+	domain: string,
+	device: DeviceCodeResponse,
+	signal?: AbortSignal,
+): Promise<string> {
 	const urls = getUrls(domain);
-	return pollOAuthDeviceCodeFlow({
+	return pollOAuthDeviceCodeFlow<string>({
 		intervalSeconds: device.interval,
 		expiresInSeconds: device.expires_in,
 		signal,
@@ -163,7 +179,7 @@ async function pollForGitHubAccessToken(domain: string, device: DeviceCodeRespon
 			});
 
 			if (raw && typeof raw === "object" && typeof (raw as DeviceTokenSuccessResponse).access_token === "string") {
-				return { status: "complete", accessToken: (raw as DeviceTokenSuccessResponse).access_token };
+				return { status: "complete", value: (raw as DeviceTokenSuccessResponse).access_token };
 			}
 
 			if (raw && typeof raw === "object" && typeof (raw as DeviceTokenErrorResponse).error === "string") {
