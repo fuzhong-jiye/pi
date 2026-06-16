@@ -33,7 +33,7 @@ import {
 	resetApiProviders,
 	streamSimple,
 } from "@earendil-works/pi-ai";
-import { theme } from "../modes/interactive/theme/theme.ts";
+import { getThemeByName, theme } from "../modes/interactive/theme/theme.ts";
 import { stripFrontmatter } from "../utils/frontmatter.ts";
 import { resolvePath } from "../utils/paths.ts";
 import { sleep } from "../utils/sleep.ts";
@@ -1606,6 +1606,11 @@ export class AgentSession {
 	// Queue Mode Management
 	// =========================================================================
 
+	private syncQueueModesFromSettings(): void {
+		this.agent.steeringMode = this.settingsManager.getSteeringMode();
+		this.agent.followUpMode = this.settingsManager.getFollowUpMode();
+	}
+
 	/**
 	 * Set steering message mode.
 	 * Saves to settings.
@@ -2239,6 +2244,7 @@ export class AgentSession {
 			{
 				getModel: () => this.model,
 				isIdle: () => !this.isStreaming,
+				isProjectTrusted: () => this.settingsManager.isProjectTrusted(),
 				getSignal: () => this.agent.signal,
 				abort: () => {
 					if (this._extensionAbortHandler) {
@@ -2430,6 +2436,7 @@ export class AgentSession {
 		const previousFlagValues = this._extensionRunner.getFlagValues();
 		await emitSessionShutdownEvent(this._extensionRunner, { type: "session_shutdown", reason: "reload" });
 		await this.settingsManager.reload();
+		this.syncQueueModesFromSettings();
 		resetApiProviders();
 		await this._resourceLoader.reload();
 		this._buildRuntime({
@@ -3010,7 +3017,8 @@ export class AgentSession {
 	 * @returns Path to exported file
 	 */
 	async exportToHtml(outputPath?: string): Promise<string> {
-		const themeName = this.settingsManager.getTheme();
+		const configuredThemeName = this.settingsManager.getTheme();
+		const themeName = configuredThemeName && getThemeByName(configuredThemeName) ? configuredThemeName : undefined;
 
 		// Create tool renderer if we have an extension runner (for custom tool HTML rendering)
 		const toolRenderer: ToolHtmlRenderer = createToolHtmlRenderer({

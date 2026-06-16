@@ -554,7 +554,8 @@ function buildParams(
 	}
 
 	if (compat.thinkingFormat === "zai" && model.reasoning) {
-		(params as any).enable_thinking = !!options?.reasoningEffort;
+		const zaiParams = params as typeof params & { thinking?: { type: "enabled" | "disabled" } };
+		zaiParams.thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
 	} else if (compat.thinkingFormat === "qwen" && model.reasoning) {
 		(params as any).enable_thinking = !!options?.reasoningEffort;
 	} else if (compat.thinkingFormat === "qwen-chat-template" && model.reasoning) {
@@ -563,7 +564,11 @@ function buildParams(
 			preserve_thinking: true,
 		};
 	} else if (compat.thinkingFormat === "deepseek" && model.reasoning) {
-		(params as any).thinking = { type: options?.reasoningEffort ? "enabled" : "disabled" };
+		if (options?.reasoningEffort) {
+			(params as any).thinking = { type: "enabled" };
+		} else if (model.thinkingLevelMap?.off !== null) {
+			(params as any).thinking = { type: "disabled" };
+		}
 		if (options?.reasoningEffort && compat.supportsReasoningEffort) {
 			(params as any).reasoning_effort =
 				model.thinkingLevelMap?.[options.reasoningEffort] ?? options.reasoningEffort;
@@ -610,7 +615,7 @@ function buildParams(
 	}
 
 	// OpenRouter provider routing preferences
-	if (model.baseUrl.includes("openrouter.ai") && model.compat?.openRouterRouting) {
+	if (model.compat?.openRouterRouting) {
 		(params as any).provider = model.compat.openRouterRouting;
 	}
 
